@@ -2,7 +2,7 @@
 # Development Makefile
 
 .PHONY: help build build-cpu build-cuda install install-user uninstall \
-        lint lint-python lint-shell validate test clean start stop logs rpm
+        lint lint-python lint-shell validate validate-packit test clean start stop logs rpm
 
 # Default target
 help:
@@ -25,6 +25,7 @@ help:
 	@echo "  lint-python   Run Python linter (ruff)"
 	@echo "  lint-shell    Run shell script linter (shellcheck)"
 	@echo "  validate      Validate container and quadlet files"
+	@echo "  validate-packit  Validate Packit configuration"
 	@echo "  test          Build and run basic tests"
 	@echo ""
 	@echo "Service targets:"
@@ -115,6 +116,14 @@ validate:
 	fi
 	@rm -rf /tmp/quadlet-test
 	@echo "Quadlet validation complete!"
+
+validate-packit:
+	@echo "==> Validating Packit configuration..."
+	podman run --rm --security-opt label=disable \
+		-v $(PWD):/src:ro -w /src \
+		quay.io/packit/packit:latest \
+		packit validate
+	@echo "Packit configuration valid!"
 
 # Testing
 test: lint validate

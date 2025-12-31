@@ -1,0 +1,32 @@
+---
+# Packit configuration for COPR builds
+# Docs: https://packit.dev/docs/configuration
+
+specfile_path: chatterbox-spd.spec
+upstream_package_name: chatterbox-spd
+downstream_package_name: chatterbox-spd
+
+# Archive creation for SRPM
+actions:
+  create-archive:
+    - bash -c "git archive --format=tar.gz --prefix=chatterbox-spd-${PACKIT_PROJECT_VERSION}/ -o chatterbox-spd-${PACKIT_PROJECT_VERSION}.tar.gz HEAD"
+    - bash -c "echo chatterbox-spd-${PACKIT_PROJECT_VERSION}.tar.gz"
+
+jobs:
+  # Build in COPR on every push to main
+  - job: copr_build
+    trigger: commit
+    branch: main
+    owner: rsturla
+    project: chatterbox-spd
+    targets:
+      - fedora-all
+
+  # Build in COPR on pull requests (for testing)
+  - job: copr_build
+    trigger: pull_request
+    owner: rsturla
+    project: chatterbox-spd
+    targets:
+      - fedora-rawhide
+      - fedora-43
