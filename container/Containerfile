@@ -68,46 +68,6 @@ RUN --mount=type=secret,id=hf_token \
     HF_TOKEN=$(cat /run/secrets/hf_token) \
     python3 -c "from chatterbox.tts_turbo import ChatterboxTurboTTS; ChatterboxTurboTTS.from_pretrained(device='cpu')"
 
-# Strip unnecessary files to reduce image size
-RUN set -ex && \
-    SITE_PACKAGES=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
-    # Remove test directories
-    find "$SITE_PACKAGES" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type d -name "testing" -exec rm -rf {} + 2>/dev/null || true && \
-    # Remove documentation and examples
-    find "$SITE_PACKAGES" -type d -name "docs" -exec rm -rf {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type d -name "doc" -exec rm -rf {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true && \
-    # Remove Python cache files
-    find "$SITE_PACKAGES" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type f -name "*.pyc" -delete 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type f -name "*.pyo" -delete 2>/dev/null || true && \
-    # Remove type stubs and typing files (not needed at runtime)
-    find "$SITE_PACKAGES" -type f -name "*.pyi" -delete 2>/dev/null || true && \
-    # Remove package metadata (not needed at runtime)
-    find "$SITE_PACKAGES" -type d -name "*.dist-info" -exec rm -rf {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true && \
-    # Remove header files (not needed at runtime)
-    find "$SITE_PACKAGES" -type f -name "*.h" -delete 2>/dev/null || true && \
-    # Strip debug symbols from shared libraries
-    find "$SITE_PACKAGES" -type f -name "*.so" -exec strip --strip-unneeded {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type f -name "*.so.*" -exec strip --strip-unneeded {} + 2>/dev/null || true && \
-    # Remove NVIDIA/CUDA files not needed for CPU build
-    rm -rf "$SITE_PACKAGES/nvidia" 2>/dev/null || true && \
-    rm -rf "$SITE_PACKAGES/triton" 2>/dev/null || true && \
-    # Remove unused PyTorch components (not needed for inference)
-    rm -rf "$SITE_PACKAGES/torch/distributed" 2>/dev/null || true && \
-    rm -rf "$SITE_PACKAGES/torch/onnx" 2>/dev/null || true && \
-    rm -rf "$SITE_PACKAGES/torch/utils/tensorboard" 2>/dev/null || true && \
-    rm -rf "$SITE_PACKAGES/torch/_inductor" 2>/dev/null || true && \
-    rm -rf "$SITE_PACKAGES/caffe2" 2>/dev/null || true && \
-    # Clean model cache - remove .git and other unnecessary files
-    find /app/cache -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true && \
-    find /app/cache -type f -name "*.md" -delete 2>/dev/null || true && \
-    find /app/cache -type f -name "*.txt" -delete 2>/dev/null || true && \
-    echo "CPU cleanup complete"
-
 # =============================================================================
 # CUDA builder stage - install and optimize dependencies
 # =============================================================================
@@ -137,48 +97,6 @@ ENV TORCH_HOME=/app/cache
 RUN --mount=type=secret,id=hf_token \
     HF_TOKEN=$(cat /run/secrets/hf_token) \
     python3 -c "from chatterbox.tts_turbo import ChatterboxTurboTTS; ChatterboxTurboTTS.from_pretrained(device='cpu')"
-
-# Strip unnecessary files to reduce image size
-RUN set -ex && \
-    SITE_PACKAGES=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
-    # Remove test directories
-    find "$SITE_PACKAGES" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type d -name "testing" -exec rm -rf {} + 2>/dev/null || true && \
-    # Remove documentation and examples
-    find "$SITE_PACKAGES" -type d -name "docs" -exec rm -rf {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type d -name "doc" -exec rm -rf {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true && \
-    # Remove Python cache files
-    find "$SITE_PACKAGES" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type f -name "*.pyc" -delete 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type f -name "*.pyo" -delete 2>/dev/null || true && \
-    # Remove type stubs and typing files (not needed at runtime)
-    find "$SITE_PACKAGES" -type f -name "*.pyi" -delete 2>/dev/null || true && \
-    # Remove package metadata (not needed at runtime)
-    find "$SITE_PACKAGES" -type d -name "*.dist-info" -exec rm -rf {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true && \
-    # Remove header files (not needed at runtime)
-    find "$SITE_PACKAGES" -type f -name "*.h" -delete 2>/dev/null || true && \
-    # Strip debug symbols from shared libraries (significant savings)
-    find "$SITE_PACKAGES" -type f -name "*.so" -exec strip --strip-unneeded {} + 2>/dev/null || true && \
-    find "$SITE_PACKAGES" -type f -name "*.so.*" -exec strip --strip-unneeded {} + 2>/dev/null || true && \
-    # Remove unused CUDA architectures from PyTorch (keep only common ones)
-    # Note: This removes PTX code for less common GPU architectures
-    find "$SITE_PACKAGES/torch" -type f -name "*.fatbin" -delete 2>/dev/null || true && \
-    # Remove triton (only needed for torch.compile, not used)
-    rm -rf "$SITE_PACKAGES/triton" 2>/dev/null || true && \
-    # Remove unused PyTorch components (not needed for inference)
-    rm -rf "$SITE_PACKAGES/torch/distributed" 2>/dev/null || true && \
-    rm -rf "$SITE_PACKAGES/torch/onnx" 2>/dev/null || true && \
-    rm -rf "$SITE_PACKAGES/torch/utils/tensorboard" 2>/dev/null || true && \
-    rm -rf "$SITE_PACKAGES/torch/_inductor" 2>/dev/null || true && \
-    rm -rf "$SITE_PACKAGES/caffe2" 2>/dev/null || true && \
-    # Clean model cache - remove .git and other unnecessary files
-    find /app/cache -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true && \
-    find /app/cache -type f -name "*.md" -delete 2>/dev/null || true && \
-    find /app/cache -type f -name "*.txt" -delete 2>/dev/null || true && \
-    echo "CUDA cleanup complete"
 
 # =============================================================================
 # CPU runtime stage - clean image with only required files
