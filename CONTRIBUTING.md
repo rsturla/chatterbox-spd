@@ -161,20 +161,13 @@ cat ~/.config/containers/systemd/chatterbox-tts.container
 systemctl --user cat chatterbox-tts
 ```
 
-## Release Process
+## Container Images
 
-Releases are automated via GitHub Actions:
+Container images are built and pushed automatically on every commit to `main`:
 
-1. Update version references in README if needed
-2. Create and push a tag:
-   ```bash
-   git tag v1.0.0
-   git push origin v1.0.0
-   ```
-3. GitHub Actions will:
-   - Build container images
-   - Push to GHCR with version tags
-   - Create a GitHub Release
+- Images are tagged with the short commit SHA (e.g., `abc1234`, `abc1234-cpu`, `abc1234-cuda`)
+- `latest` and `cpu` tags always point to the most recent CPU build
+- `cuda` tag always points to the most recent CUDA build
 
 ## Getting Help
 

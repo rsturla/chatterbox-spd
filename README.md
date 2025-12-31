@@ -11,7 +11,7 @@ Integrate [Chatterbox TTS](https://github.com/resemble-ai/chatterbox) from Resem
 ## Features
 
 - High-quality neural TTS powered by Chatterbox (350M-500M parameters)
-- Models baked into container image - no download on first use
+- Models baked into container image
 - Voice cloning support (provide a 10-second reference clip)
 - Container-based - no pip install required on host
 - Native systemd integration via Podman Quadlets
@@ -99,13 +99,13 @@ mkdir -p ~/.cache/chatterbox-spd/voices
 cp my_voice.wav ~/.cache/chatterbox-spd/voices/alice.wav
 ```
 
-2. Update `/etc/speech-dispatcher/modules/chatterbox.conf`:
+1. Update `/etc/speech-dispatcher/modules/chatterbox.conf`:
 
 ```
 AddVoice "en" "FEMALE1" "alice"
 ```
 
-3. Use the voice:
+1. Use the voice:
 
 ```bash
 spd-say -o chatterbox -y FEMALE1 "Hello, I sound like Alice now"
@@ -125,27 +125,23 @@ spd-say -o chatterbox "I'm not sure... [sigh] let me think."
 Pre-built images are available from GitHub Container Registry:
 
 ```bash
-# CUDA/GPU version (recommended if you have NVIDIA GPU)
-podman pull ghcr.io/rsturla/chatterbox-spd:latest-cuda
-
-# CPU-only version
-podman pull ghcr.io/rsturla/chatterbox-spd:latest-cpu
-
-# Latest (defaults to CUDA)
+# CPU version (default)
 podman pull ghcr.io/rsturla/chatterbox-spd:latest
+
+# CUDA/GPU version (for NVIDIA GPUs)
+podman pull ghcr.io/rsturla/chatterbox-spd:cuda
 ```
 
 ### Available Tags
 
 | Tag | Description |
 |-----|-------------|
-| `latest` | Latest stable (CUDA) |
-| `latest-cuda` | Latest with CUDA support |
-| `latest-cpu` | Latest CPU-only |
-| `v1.0.0-cuda` | Specific version with CUDA |
-| `v1.0.0-cpu` | Specific version CPU-only |
-| `main-cuda` | Latest from main branch (CUDA) |
-| `main-cpu` | Latest from main branch (CPU) |
+| `latest` | Latest commit (CPU) |
+| `cpu` | Latest CPU version |
+| `cuda` | Latest CUDA/GPU version |
+| `<sha>` | Specific commit (CPU) |
+| `<sha>-cpu` | Specific commit CPU |
+| `<sha>-cuda` | Specific commit CUDA |
 
 ## Managing the Service
 
@@ -200,8 +196,7 @@ chatterbox-spd/
 ├── .github/
 │   ├── workflows/
 │   │   ├── build-container.yml  # Build and push to GHCR
-│   │   ├── ci.yml               # Linting and validation
-│   │   └── release.yml          # GitHub releases
+│   │   └── ci.yml               # Linting and validation
 │   └── dependabot.yml           # Dependency updates
 ├── bin/
 │   ├── chatterbox-tts-daemon    # TTS daemon (runs in container)
@@ -303,9 +298,10 @@ spd-say -O
 
 # Verify config file permissions (should be 644)
 ls -la /etc/speech-dispatcher/modules/chatterbox.conf
+ls -la /etc/speech-dispatcher/modules.d/chatterbox.conf
 
-# Check speechd.conf has the module
-grep chatterbox /etc/speech-dispatcher/speechd.conf
+# Check speechd.conf includes drop-in directory
+grep 'modules.d' /etc/speech-dispatcher/speechd.conf
 ```
 
 ## Uninstalling
@@ -315,8 +311,8 @@ grep chatterbox /etc/speech-dispatcher/speechd.conf
 ./install.sh --uninstall
 
 # Also remove container images
-podman rmi ghcr.io/rsturla/chatterbox-spd:latest-cuda
-podman rmi ghcr.io/rsturla/chatterbox-spd:latest-cpu
+podman rmi ghcr.io/rsturla/chatterbox-spd:latest
+podman rmi ghcr.io/rsturla/chatterbox-spd:cuda
 
 # Remove cached voices
 rm -rf ~/.cache/chatterbox-spd

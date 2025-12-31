@@ -218,12 +218,11 @@ build_image() {
 pull_image() {
     local gpu_mode tag image
     gpu_mode=$(detect_gpu)
-    tag="latest"
 
     if [[ "$gpu_mode" == "cuda" ]]; then
-        tag="latest-cuda"
+        tag="cuda"
     else
-        tag="latest-cpu"
+        tag="latest"  # CPU is the default
     fi
 
     local image="$REGISTRY:$tag"
@@ -297,6 +296,7 @@ install_speechd_config() {
     info "Installing speech-dispatcher configuration..."
 
     local spd_modules_dir="/etc/speech-dispatcher/modules"
+    local spd_modules_d="/etc/speech-dispatcher/modules.d"
     local spd_conf="/etc/speech-dispatcher/speechd.conf"
 
     # Ensure modules directory exists
@@ -304,26 +304,33 @@ install_speechd_config() {
         sudo mkdir -p "$spd_modules_dir"
     fi
 
-    # Install module config with proper permissions (644)
-    if [[ -w "$spd_modules_dir" ]]; then
-        install -m 644 "$SCRIPT_DIR/config/chatterbox.conf" "$spd_modules_dir/"
-    else
-        sudo install -m 644 "$SCRIPT_DIR/config/chatterbox.conf" "$spd_modules_dir/"
-    fi
+    # Install module config (GenericExecuteSynth, voices, etc.)
+    sudo install -m 644 "$SCRIPT_DIR/config/chatterbox.conf" "$spd_modules_dir/"
     success "Module config installed to $spd_modules_dir/chatterbox.conf"
 
-    # Add module to speechd.conf if not already present
+    # Create drop-in directory for AddModule statements
+    if [[ ! -d "$spd_modules_d" ]]; then
+        sudo mkdir -p "$spd_modules_d"
+    fi
+
+    # Install drop-in config (AddModule statement)
+    sudo install -m 644 "$SCRIPT_DIR/config/modules.d/chatterbox.conf" "$spd_modules_d/"
+    success "Drop-in config installed to $spd_modules_d/chatterbox.conf"
+
+    # Ensure speechd.conf includes the drop-in directory
     if [[ -f "$spd_conf" ]]; then
-        if ! grep -q 'AddModule.*chatterbox' "$spd_conf"; then
-            info "Adding chatterbox module to $spd_conf..."
-            echo 'AddModule "chatterbox" "sd_generic" "chatterbox.conf"' | sudo tee -a "$spd_conf" > /dev/null
-            success "Module added to speechd.conf"
+        if ! grep -q 'Include "modules.d/\*.conf"' "$spd_conf"; then
+            info "Adding modules.d include to $spd_conf..."
+            echo '' | sudo tee -a "$spd_conf" > /dev/null
+            echo '# Include drop-in module configurations' | sudo tee -a "$spd_conf" > /dev/null
+            echo 'Include "modules.d/*.conf"' | sudo tee -a "$spd_conf" > /dev/null
+            success "Include directive added to speechd.conf"
         else
-            success "Module already configured in speechd.conf"
+            success "Drop-in directory already configured in speechd.conf"
         fi
     else
         warn "speechd.conf not found at $spd_conf"
-        warn "Manually add: AddModule \"chatterbox\" \"sd_generic\" \"chatterbox.conf\""
+        warn "Manually add: Include \"modules.d/*.conf\""
     fi
 
     # Restart speech-dispatcher to pick up changes
@@ -362,17 +369,11 @@ uninstall() {
     # Remove client
     sudo rm -f "$INSTALL_PREFIX/bin/chatterbox-tts-client"
 
-    # Remove speech-dispatcher config
+    # Remove speech-dispatcher config files
     sudo rm -f /etc/speech-dispatcher/modules/chatterbox.conf 2>/dev/null || true
-    rm -f "$HOME/.config/speech-dispatcher/modules/chatterbox.conf"
-
-    # Remove AddModule line from speechd.conf
-    local spd_conf="/etc/speech-dispatcher/speechd.conf"
-    if [[ -f "$spd_conf" ]] && grep -q 'AddModule.*chatterbox' "$spd_conf"; then
-        info "Removing chatterbox module from $spd_conf..."
-        sudo sed -i '/AddModule.*chatterbox/d' "$spd_conf"
-        success "Module removed from speechd.conf"
-    fi
+    sudo rm -f /etc/speech-dispatcher/modules.d/chatterbox.conf 2>/dev/null || true
+    rm -f "$HOME/.config/speech-dispatcher/modules/chatterbox.conf" 2>/dev/null || true
+    success "Speech-dispatcher config files removed"
 
     # Reload systemd
     systemctl --user daemon-reload 2>/dev/null || true
