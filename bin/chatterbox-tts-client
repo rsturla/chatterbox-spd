@@ -61,7 +61,7 @@ def connect_to_daemon(socket_path: str, max_retries: int = 3) -> socket.socket:
             sock.settimeout(CONNECT_TIMEOUT)
             sock.connect(socket_path)
             return sock
-        except socket.error as e:
+        except OSError as e:
             last_error = e
             if attempt < max_retries - 1:
                 time.sleep(0.5)
@@ -250,7 +250,7 @@ def main():
                 # Clean up temp file
                 try:
                     os.remove(audio_file)
-                except:
+                except OSError:
                     pass
 
     except Exception as e:

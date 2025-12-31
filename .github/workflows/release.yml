@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          # Extract version from tag
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          # Generate release notes
+          cat << EOF > release_notes.md
+          ## Chatterbox TTS for Speech Dispatcher ${GITHUB_REF_NAME}
+
+          ### Container Images
+
+          Pull the container images from GitHub Container Registry:
+
+          \`\`\`bash
+          # CUDA/GPU version (recommended if you have NVIDIA GPU)
+          podman pull ghcr.io/${{ github.repository }}:${GITHUB_REF_NAME}-cuda
+
+          # CPU version
+          podman pull ghcr.io/${{ github.repository }}:${GITHUB_REF_NAME}-cpu
+
+          # Latest (points to CUDA)
+          podman pull ghcr.io/${{ github.repository }}:latest
+          \`\`\`
+
+          ### Quick Install
+
+          \`\`\`bash
+          git clone https://github.com/${{ github.repository }}.git
+          cd chatterbox-spd
+          ./install.sh --user
+          systemctl --user enable --now chatterbox-tts
+          \`\`\`
+
+          ### What's Changed
+
+          See the [full changelog](https://github.com/${{ github.repository }}/compare/...${GITHUB_REF_NAME}) for details.
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+          generate_release_notes: true
+          make_latest: true

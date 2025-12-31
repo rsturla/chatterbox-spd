@@ -19,7 +19,6 @@ import sys
 import tempfile
 import threading
 import time
-from pathlib import Path
 
 # Ensure we can find the modules
 try:
@@ -109,7 +108,7 @@ class ChatterboxDaemon:
                         cfg_weight=cfg_weight
                     )
             except Exception as e:
-                raise RuntimeError(f"Synthesis failed: {e}")
+                raise RuntimeError(f"Synthesis failed: {e}") from e
 
             # Save to temporary file in the socket directory (shared with host)
             socket_dir = os.path.dirname(self.socket_path)
@@ -196,14 +195,14 @@ class ChatterboxDaemon:
 
             self._send_response(client_socket, response)
 
-        except socket.timeout:
+        except TimeoutError:
             print("Client connection timed out", file=sys.stderr)
         except Exception as e:
             print(f"Error handling client: {e}", file=sys.stderr)
         finally:
             try:
                 client_socket.close()
-            except:
+            except OSError:
                 pass
 
     def _send_response(self, client_socket: socket.socket, response: dict):
@@ -243,7 +242,7 @@ class ChatterboxDaemon:
                     thread = threading.Thread(target=self.handle_client, args=(client_socket,))
                     thread.daemon = True
                     thread.start()
-                except socket.timeout:
+                except TimeoutError:
                     continue
             except Exception as e:
                 if self.running:
@@ -256,13 +255,13 @@ class ChatterboxDaemon:
         if self.server_socket:
             try:
                 self.server_socket.close()
-            except:
+            except OSError:
                 pass
 
         if os.path.exists(self.socket_path):
             try:
                 os.remove(self.socket_path)
-            except:
+            except OSError:
                 pass
 
         print("Daemon stopped", file=sys.stderr)

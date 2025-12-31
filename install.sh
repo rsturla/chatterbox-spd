@@ -24,6 +24,10 @@ BUILD_LOCAL=false
 USE_GPU=auto
 UNINSTALL=false
 
+# Container registry configuration
+# Override with environment variable: CHATTERBOX_REGISTRY=ghcr.io/myuser/chatterbox-spd
+REGISTRY="${CHATTERBOX_REGISTRY:-ghcr.io/rsturla/chatterbox-spd}"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -84,9 +88,10 @@ check_podman_version() {
         error "Podman is required for Quadlet support.\n  Install: sudo dnf install podman"
     fi
 
-    local version=$(podman --version | grep -oP '\d+\.\d+' | head -1)
-    local major=$(echo "$version" | cut -d. -f1)
-    local minor=$(echo "$version" | cut -d. -f2)
+    local version major minor
+    version=$(podman --version | grep -oP '\d+\.\d+' | head -1)
+    major=$(echo "$version" | cut -d. -f1)
+    minor=$(echo "$version" | cut -d. -f2)
 
     if [[ $major -lt 4 ]] || [[ $major -eq 4 && $minor -lt 4 ]]; then
         error "Podman 4.4+ required for Quadlet support. Found: $version"
@@ -119,7 +124,8 @@ check_dependencies() {
 
     check_podman_version
 
-    local gpu_mode=$(detect_gpu)
+    local gpu_mode
+    gpu_mode=$(detect_gpu)
 
     if [[ "$gpu_mode" == "cuda" ]]; then
         success "GPU mode: CUDA"
@@ -170,14 +176,16 @@ install_client() {
 }
 
 build_image() {
-    local gpu_mode=$(detect_gpu)
+    local gpu_mode token_file
+    gpu_mode=$(detect_gpu)
 
     info "Building container image locally (mode: $gpu_mode)..."
 
     # Check for HuggingFace token
     if [[ -z "${HF_TOKEN:-}" ]]; then
         if [[ -f "$HOME/.cache/huggingface/token" ]]; then
-            export HF_TOKEN=$(cat "$HOME/.cache/huggingface/token")
+            HF_TOKEN=$(cat "$HOME/.cache/huggingface/token")
+            export HF_TOKEN
             info "Using HuggingFace token from ~/.cache/huggingface/token"
         else
             warn "No HuggingFace token found."
@@ -188,7 +196,7 @@ build_image() {
     fi
 
     # Write token to temp file for secret mount
-    local token_file=$(mktemp)
+    token_file=$(mktemp)
     echo -n "$HF_TOKEN" > "$token_file"
     chmod 600 "$token_file"
 
@@ -207,13 +215,44 @@ build_image() {
     success "Container image built: chatterbox-tts:$gpu_mode"
 }
 
+pull_image() {
+    local gpu_mode tag image
+    gpu_mode=$(detect_gpu)
+    tag="latest"
+
+    if [[ "$gpu_mode" == "cuda" ]]; then
+        tag="latest-cuda"
+    else
+        tag="latest-cpu"
+    fi
+
+    local image="$REGISTRY:$tag"
+
+    info "Pulling container image: $image"
+    info "(This may take a while on first run, ~2-3GB download)"
+
+    if podman pull "$image"; then
+        # Tag locally for quadlet to find
+        podman tag "$image" "chatterbox-tts:$gpu_mode"
+        podman tag "$image" "chatterbox-tts:latest"
+        success "Container image pulled: $image"
+    else
+        warn "Failed to pull from registry. You may need to build locally:"
+        warn "  ./install.sh --build"
+        warn ""
+        warn "Or check if you need to authenticate:"
+        warn "  podman login ghcr.io"
+        error "Image pull failed"
+    fi
+}
+
 install_quadlet() {
-    local gpu_mode=$(detect_gpu)
+    local gpu_mode quadlet_src quadlet_dir
+    gpu_mode=$(detect_gpu)
 
     info "Installing Podman Quadlet..."
 
     # Choose the right quadlet file
-    local quadlet_src
     if [[ "$gpu_mode" == "cuda" ]]; then
         quadlet_src="$SCRIPT_DIR/container/chatterbox-tts-cuda.container"
     else
@@ -221,7 +260,7 @@ install_quadlet() {
     fi
 
     if $USER_INSTALL; then
-        local quadlet_dir="$HOME/.config/containers/systemd"
+        quadlet_dir="$HOME/.config/containers/systemd"
         mkdir -p "$quadlet_dir"
         cp "$quadlet_src" "$quadlet_dir/chatterbox-tts.container"
 
@@ -235,7 +274,7 @@ install_quadlet() {
         info "To enable on boot: systemctl --user enable chatterbox-tts"
         info "To check status: systemctl --user status chatterbox-tts"
     else
-        local quadlet_dir="/etc/containers/systemd"
+        quadlet_dir="/etc/containers/systemd"
         if [[ $EUID -ne 0 ]]; then
             sudo mkdir -p "$quadlet_dir"
             sudo cp "$quadlet_src" "$quadlet_dir/chatterbox-tts.container"
@@ -367,8 +406,7 @@ main() {
         build_image
         echo ""
     else
-        info "Container image will be pulled on first start"
-        info "Or build locally with: $0 --build"
+        pull_image
         echo ""
     fi
 
@@ -396,7 +434,7 @@ main() {
         echo "  2. Enable on boot:"
         echo "     systemctl --user enable chatterbox-tts"
         echo ""
-        echo "  3. Check logs (first run downloads ~2GB models):"
+        echo "  3. Check logs:"
         echo "     journalctl --user -u chatterbox-tts -f"
     else
         echo "  1. Start the service:"
@@ -405,7 +443,7 @@ main() {
         echo "  2. Enable on boot:"
         echo "     sudo systemctl enable chatterbox-tts"
         echo ""
-        echo "  3. Check logs (first run downloads ~2GB models):"
+        echo "  3. Check logs:"
         echo "     sudo journalctl -u chatterbox-tts -f"
     fi
     echo ""
