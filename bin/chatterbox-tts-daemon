@@ -108,7 +108,10 @@ class ChatterboxDaemon:
                         text,
                         audio_prompt_path=audio_prompt_path,
                         exaggeration=exaggeration,
-                        cfg_weight=cfg_weight
+                        cfg_weight=cfg_weight,
+                        # Disable norm_loudness to work around dtype bug in chatterbox-tts
+                        # See: https://github.com/resemble-ai/chatterbox/issues/XXX
+                        norm_loudness=False
                     )
                 else:
                     wav = self.model.generate(
