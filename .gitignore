@@ -67,3 +67,6 @@ token
 *.wav
 *.mp3
 test_output/
+
+# RPM build output
+rpmbuild/

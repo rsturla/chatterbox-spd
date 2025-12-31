@@ -2,7 +2,7 @@
 # Development Makefile
 
 .PHONY: help build build-cpu build-cuda install install-user uninstall \
-        lint lint-python lint-shell validate test clean start stop logs
+        lint lint-python lint-shell validate test clean start stop logs rpm
 
 # Default target
 help:
@@ -37,6 +37,9 @@ help:
 	@echo "Cleanup targets:"
 	@echo "  clean         Remove build artifacts"
 	@echo "  clean-all     Remove build artifacts and container images"
+	@echo ""
+	@echo "Package targets:"
+	@echo "  rpm           Build RPM package in container"
 
 # Build targets
 build:
@@ -166,3 +169,31 @@ run-daemon:
 
 ping:
 	@python3 bin/chatterbox-tts-client --ping && echo "Daemon is running" || echo "Daemon not responding"
+
+# RPM build (runs in Fedora container)
+VERSION := 0.1.0
+RPMDIR := $(PWD)/rpmbuild
+
+rpm:
+	@echo "==> Building RPM in Fedora 43 container..."
+	@mkdir -p $(RPMDIR)
+	podman run --rm --security-opt label=disable \
+		-v $(PWD):/src:ro \
+		-v $(RPMDIR):/output:z \
+		registry.fedoraproject.org/fedora:43 \
+		bash -c ' \
+			set -e && \
+			dnf install -y rpm-build rpmdevtools > /dev/null 2>&1 && \
+			rpmdev-setuptree && \
+			cp /src/chatterbox-spd.spec ~/rpmbuild/SPECS/ && \
+			mkdir -p /tmp/chatterbox-spd-$(VERSION) && \
+			cp -r /src/bin /src/config /src/container /src/README.md /src/LICENSE ~/rpmbuild/SOURCES/ && \
+			cp -r /src/bin /src/config /src/container /src/README.md /src/LICENSE /tmp/chatterbox-spd-$(VERSION)/ && \
+			cd /tmp && tar -czf ~/rpmbuild/SOURCES/chatterbox-spd-$(VERSION).tar.gz chatterbox-spd-$(VERSION) && \
+			rpmbuild -ba ~/rpmbuild/SPECS/chatterbox-spd.spec && \
+			cp ~/rpmbuild/RPMS/noarch/*.rpm /output/ && \
+			cp ~/rpmbuild/SRPMS/*.rpm /output/ \
+		'
+	@echo ""
+	@echo "==> RPM packages built:"
+	@ls -la $(RPMDIR)/*.rpm

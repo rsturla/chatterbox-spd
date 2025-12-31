@@ -19,10 +19,10 @@ Description=Chatterbox TTS Daemon for Speech Dispatcher
 After=local-fs.target
 
 [Container]
-# Container image - use local build or registry
-Image=localhost/chatterbox-tts:latest
-# Or use a registry:
-# Image=ghcr.io/chatterbox-spd/chatterbox-tts:latest
+# Container image from GitHub Container Registry
+Image=ghcr.io/rsturla/chatterbox-spd:latest
+# For local development builds, use:
+# Image=localhost/chatterbox-tts:latest
 
 # Container name
 ContainerName=chatterbox-tts

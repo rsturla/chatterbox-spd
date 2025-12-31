@@ -20,10 +20,10 @@ Description=Chatterbox TTS Daemon for Speech Dispatcher (CUDA)
 After=local-fs.target
 
 [Container]
-# Container image - CUDA version
-Image=localhost/chatterbox-tts:cuda
-# Or use a registry:
-# Image=ghcr.io/chatterbox-spd/chatterbox-tts:cuda
+# Container image from GitHub Container Registry (CUDA version)
+Image=ghcr.io/rsturla/chatterbox-spd:cuda
+# For local development builds, use:
+# Image=localhost/chatterbox-tts:cuda
 
 # Container name
 ContainerName=chatterbox-tts

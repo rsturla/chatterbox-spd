@@ -45,9 +45,7 @@ install -Dm644 config/modules.d/chatterbox.conf %{buildroot}%{_sysconfdir}/speec
 install -Dm644 container/chatterbox-tts.container %{buildroot}%{_datadir}/%{name}/quadlets/chatterbox-tts.container
 install -Dm644 container/chatterbox-tts-cuda.container %{buildroot}%{_datadir}/%{name}/quadlets/chatterbox-tts-cuda.container
 
-# Documentation
-install -Dm644 README.md %{buildroot}%{_docdir}/%{name}/README.md
-install -Dm644 LICENSE %{buildroot}%{_docdir}/%{name}/LICENSE
+# Note: README.md and LICENSE are handled by %doc and %license macros in %files
 
 %post
 # Add Include directive to speechd.conf if not present
