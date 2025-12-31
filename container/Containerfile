@@ -41,12 +41,12 @@ FROM base AS cpu-deps
 
 WORKDIR /app
 
-# Install PyTorch CPU-only (smaller)
-RUN pip install --no-cache-dir \
-    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-# Install chatterbox-tts
+# Install chatterbox-tts first (will pull torch dependencies)
 RUN pip install --no-cache-dir chatterbox-tts
+
+# Reinstall PyTorch CPU-only to replace CUDA versions (smaller image)
+RUN pip install --no-cache-dir --force-reinstall \
+    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 # Pre-download models during build
 ENV HF_HOME=/app/cache
@@ -63,12 +63,12 @@ FROM base AS cuda-deps
 
 WORKDIR /app
 
-# Install PyTorch with CUDA support (runtime libs come from host via CDI/hooks)
-RUN pip install --no-cache-dir \
-    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-
-# Install chatterbox-tts
+# Install chatterbox-tts first (will pull torch dependencies)
 RUN pip install --no-cache-dir chatterbox-tts
+
+# Reinstall PyTorch with CUDA 12.4 support (runtime libs come from host via CDI/hooks)
+RUN pip install --no-cache-dir --force-reinstall \
+    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 # Pre-download models during build
 ENV HF_HOME=/app/cache
