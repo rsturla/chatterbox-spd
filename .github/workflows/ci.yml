@@ -11,25 +11,27 @@ on:
 jobs:
   lint-python:
     runs-on: ubuntu-latest
-    container:
-      image: docker.io/pipelinecomponents/ruff:latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Lint Python files
-        run: ruff check bin/
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src \
+            docker.io/pipelinecomponents/ruff:latest \
+            ruff check --no-cache bin/chatterbox-tts-client bin/chatterbox-tts-daemon
 
   lint-shell:
     runs-on: ubuntu-latest
-    container:
-      image: docker.io/koalaman/shellcheck:stable
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Check shell scripts
-        run: shellcheck install.sh container/build.sh
+        run: |
+          docker run --rm -v "$PWD:/mnt:ro" \
+            docker.io/koalaman/shellcheck:stable \
+            /mnt/install.sh /mnt/container/build.sh
 
   validate-container:
     runs-on: ubuntu-latest

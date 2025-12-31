@@ -19,7 +19,6 @@ REGISTRY="${REGISTRY:-ghcr.io}"
 IMAGE_NAME="${IMAGE_NAME:-chatterbox-spd/chatterbox-tts}"
 FULL_IMAGE="${REGISTRY}/${IMAGE_NAME}"
 PUSH=false
-PLATFORMS="linux/amd64"
 
 # Detect container runtime
 if command -v podman &> /dev/null; then
