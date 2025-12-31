@@ -27,6 +27,8 @@ After=chatterbox-tts-cuda.socket
 [Container]
 # Container image from GitHub Container Registry (CUDA version)
 Image=ghcr.io/rsturla/chatterbox-spd:cuda
+# Only pull if image is missing locally (avoids timeout on slow networks)
+Pull=missing
 # For local development builds, use:
 # Image=localhost/chatterbox-tts:cuda
 

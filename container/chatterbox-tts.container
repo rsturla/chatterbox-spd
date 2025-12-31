@@ -28,6 +28,8 @@ After=chatterbox-tts.socket
 [Container]
 # Container image from GitHub Container Registry
 Image=ghcr.io/rsturla/chatterbox-spd:latest
+# Only pull if image is missing locally (avoids timeout on slow networks)
+Pull=missing
 # For local development builds, use:
 # Image=localhost/chatterbox-tts:latest
 
