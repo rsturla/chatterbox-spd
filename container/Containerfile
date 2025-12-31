@@ -1,0 +1,113 @@
+# Chatterbox TTS for Speech Dispatcher - Container Image
+#
+# This image does NOT bundle NVIDIA CUDA libraries. Instead, it relies on
+# nvidia-container-toolkit to inject CUDA from the host at runtime.
+# This avoids NVIDIA CUDA redistribution licensing issues.
+#
+# Build:
+#   podman build -t chatterbox-tts .
+#   podman build -t chatterbox-tts:cpu --build-arg DEVICE=cpu .
+#
+# Run (GPU - requires nvidia-container-toolkit on host):
+#   podman run --device nvidia.com/gpu=all --security-opt=label=disable \
+#       -v /tmp:/tmp chatterbox-tts
+#
+# Run (CPU):
+#   podman run -v /tmp:/tmp chatterbox-tts:cpu
+#
+
+ARG DEVICE=cuda
+ARG PYTHON_VERSION=3.11
+
+# =============================================================================
+# Base stage with Python (used for both CPU and CUDA)
+# =============================================================================
+FROM docker.io/python:${PYTHON_VERSION}-slim-bookworm AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# =============================================================================
+# CPU dependencies stage
+# =============================================================================
+FROM base AS cpu-deps
+
+WORKDIR /app
+
+# Install PyTorch CPU-only (smaller)
+RUN pip install --no-cache-dir \
+    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Install chatterbox-tts
+RUN pip install --no-cache-dir chatterbox-tts
+
+# Pre-download models during build
+ENV HF_HOME=/app/cache
+ENV TORCH_HOME=/app/cache
+RUN --mount=type=secret,id=hf_token \
+    HF_TOKEN=$(cat /run/secrets/hf_token) \
+    python3 -c "from chatterbox.tts_turbo import ChatterboxTurboTTS; ChatterboxTurboTTS.from_pretrained(device='cpu')"
+
+# =============================================================================
+# CUDA dependencies stage
+# Uses same Python base - CUDA libraries injected at runtime by nvidia-container-toolkit
+# =============================================================================
+FROM base AS cuda-deps
+
+WORKDIR /app
+
+# Install PyTorch with CUDA support (runtime libs come from host via CDI/hooks)
+RUN pip install --no-cache-dir \
+    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+# Install chatterbox-tts
+RUN pip install --no-cache-dir chatterbox-tts
+
+# Pre-download models during build
+ENV HF_HOME=/app/cache
+ENV TORCH_HOME=/app/cache
+RUN --mount=type=secret,id=hf_token \
+    HF_TOKEN=$(cat /run/secrets/hf_token) \
+    python3 -c "from chatterbox.tts_turbo import ChatterboxTurboTTS; ChatterboxTurboTTS.from_pretrained(device='cpu')"
+
+# =============================================================================
+# Final stage - select based on DEVICE arg
+# =============================================================================
+FROM ${DEVICE}-deps AS final
+
+WORKDIR /app
+
+# Create directories
+RUN mkdir -p /app/voices /app/cache
+
+# Copy daemon script
+COPY bin/chatterbox-tts-daemon /app/chatterbox-tts-daemon
+RUN chmod +x /app/chatterbox-tts-daemon
+
+# Environment variables
+# HF_HUB_OFFLINE=1 prevents any runtime downloads - models are baked into image
+# HF_TOKEN dummy value satisfies token=True check (not actually used in offline mode)
+ENV CHATTERBOX_SOCKET=/tmp/chatterbox-tts.sock \
+    HF_HOME=/app/cache \
+    TORCH_HOME=/app/cache \
+    HF_HUB_OFFLINE=1 \
+    HF_TOKEN=offline_mode_dummy_token
+
+# Volume mount for voice cloning files only
+# Models are baked into the image - no cache volume needed
+VOLUME ["/app/voices"]
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python3 -c "import socket; s=socket.socket(socket.AF_UNIX); s.connect('/tmp/chatterbox-tts.sock'); s.close()" || exit 1
+
+# Run daemon
+ENTRYPOINT ["/app/chatterbox-tts-daemon"]
+CMD ["--socket", "/tmp/chatterbox-tts.sock", "--voice-dir", "/app/voices"]

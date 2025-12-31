@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""
+Chatterbox TTS Client for Speech Dispatcher
+
+This client connects to the Chatterbox TTS daemon and requests synthesis.
+It's designed to be called by speech-dispatcher's generic module.
+
+Usage:
+    echo "Text to speak" | chatterbox-tts-client [options]
+    chatterbox-tts-client --text "Text to speak" [options]
+"""
+
+import argparse
+import json
+import os
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+DEFAULT_SOCKET_PATH = os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR", "/tmp"),
+    "chatterbox-tts/chatterbox-tts.sock"
+)
+CONNECT_TIMEOUT = 30
+READ_TIMEOUT = 120
+
+
+def send_request(sock: socket.socket, request: dict) -> dict:
+    """Send a request and receive response."""
+    data = json.dumps(request).encode("utf-8")
+    length = struct.pack(">I", len(data))
+    sock.sendall(length + data)
+
+    # Read response length
+    length_data = sock.recv(4)
+    if len(length_data) < 4:
+        raise RuntimeError("Connection closed by server")
+
+    msg_length = struct.unpack(">I", length_data)[0]
+
+    # Read response
+    data = b""
+    while len(data) < msg_length:
+        chunk = sock.recv(min(4096, msg_length - len(data)))
+        if not chunk:
+            break
+        data += chunk
+
+    return json.loads(data.decode("utf-8"))
+
+
+def connect_to_daemon(socket_path: str, max_retries: int = 3) -> socket.socket:
+    """Connect to the daemon, with retries."""
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(CONNECT_TIMEOUT)
+            sock.connect(socket_path)
+            return sock
+        except socket.error as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(0.5)
+
+    raise RuntimeError(f"Failed to connect to daemon at {socket_path}: {last_error}")
+
+
+def play_audio(audio_file: str, player: str = "auto"):
+    """Play audio file using the specified player."""
+    players = {
+        "aplay": ["aplay", "-q", audio_file],
+        "paplay": ["paplay", audio_file],
+        "pw-play": ["pw-play", audio_file],
+        "play": ["play", "-q", audio_file],  # sox
+        "mpv": ["mpv", "--no-terminal", "--no-video", audio_file],
+        "ffplay": ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", audio_file],
+    }
+
+    if player == "auto":
+        # Try players in order of preference
+        for name, cmd in players.items():
+            try:
+                # Check if player exists
+                subprocess.run(["which", cmd[0]], capture_output=True, check=True)
+                player = name
+                break
+            except subprocess.CalledProcessError:
+                continue
+        else:
+            raise RuntimeError("No suitable audio player found. Install aplay, paplay, or mpv.")
+
+    if player not in players:
+        # Custom player command
+        cmd = [player, audio_file]
+    else:
+        cmd = players[player]
+
+    subprocess.run(cmd, check=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Chatterbox TTS Client for Speech Dispatcher"
+    )
+    parser.add_argument(
+        "--socket", "-s",
+        default=os.environ.get("CHATTERBOX_SOCKET", DEFAULT_SOCKET_PATH),
+        help=f"Path to daemon Unix socket (default: {DEFAULT_SOCKET_PATH})"
+    )
+    parser.add_argument(
+        "--text", "-t",
+        default=None,
+        help="Text to synthesize (default: read from stdin)"
+    )
+    parser.add_argument(
+        "--voice", "-v",
+        default=os.environ.get("CHATTERBOX_VOICE", "default"),
+        help="Voice to use (default: default)"
+    )
+    parser.add_argument(
+        "--exaggeration", "-e",
+        type=float,
+        default=float(os.environ.get("CHATTERBOX_EXAGGERATION", "0.5")),
+        help="Exaggeration parameter 0.0-1.0 (default: 0.5)"
+    )
+    parser.add_argument(
+        "--cfg-weight", "-c",
+        type=float,
+        default=float(os.environ.get("CHATTERBOX_CFG_WEIGHT", "0.5")),
+        help="CFG weight parameter 0.0-1.0 (default: 0.5)"
+    )
+    parser.add_argument(
+        "--player", "-p",
+        default=os.environ.get("CHATTERBOX_PLAYER", "auto"),
+        help="Audio player to use (auto, aplay, paplay, pw-play, play, mpv, ffplay)"
+    )
+    parser.add_argument(
+        "--output", "-o",
+        default=None,
+        help="Save audio to file instead of playing"
+    )
+    parser.add_argument(
+        "--no-play",
+        action="store_true",
+        help="Don't play audio, just output the file path"
+    )
+    parser.add_argument(
+        "--list-voices",
+        action="store_true",
+        help="List available voices and exit"
+    )
+    parser.add_argument(
+        "--ping",
+        action="store_true",
+        help="Check if daemon is running"
+    )
+
+    args = parser.parse_args()
+
+    try:
+        sock = connect_to_daemon(args.socket)
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        print("Is the chatterbox-tts-daemon running?", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        sock.settimeout(READ_TIMEOUT)
+
+        if args.ping:
+            response = send_request(sock, {"command": "ping"})
+            if response.get("status") == "ok":
+                print("Daemon is running")
+                sys.exit(0)
+            else:
+                print(f"Unexpected response: {response}")
+                sys.exit(1)
+
+        if args.list_voices:
+            response = send_request(sock, {"command": "list_voices"})
+            if response.get("status") == "ok":
+                print("Available voices:")
+                for voice in response.get("voices", []):
+                    print(f"  {voice}")
+                sys.exit(0)
+            else:
+                print(f"Error: {response.get('error', 'Unknown error')}", file=sys.stderr)
+                sys.exit(1)
+
+        # Get text to synthesize
+        if args.text:
+            text = args.text
+        else:
+            text = sys.stdin.read()
+
+        text = text.strip()
+        if not text:
+            print("Error: No text provided", file=sys.stderr)
+            sys.exit(1)
+
+        # Normalize voice name (handle speech-dispatcher's "no_voice" or empty values)
+        voice = args.voice
+        if not voice or voice in ("no_voice", ""):
+            voice = "default"
+
+        # Send synthesis request
+        request = {
+            "command": "synthesize",
+            "text": text,
+            "voice": voice,
+            "exaggeration": args.exaggeration,
+            "cfg_weight": args.cfg_weight
+        }
+
+        response = send_request(sock, request)
+
+        if response.get("error"):
+            print(f"Error: {response['error']}", file=sys.stderr)
+            sys.exit(1)
+
+        audio_file = response.get("audio_file")
+        if not audio_file:
+            print("Error: No audio file in response", file=sys.stderr)
+            sys.exit(1)
+
+        # Translate container path to host path
+        # Container: /run/chatterbox/file.wav -> Host: $XDG_RUNTIME_DIR/chatterbox-tts/file.wav
+        container_prefix = "/run/chatterbox/"
+        if audio_file.startswith(container_prefix):
+            host_socket_dir = os.path.dirname(args.socket)
+            audio_file = os.path.join(host_socket_dir, audio_file[len(container_prefix):])
+
+        if args.output:
+            # Copy to output file
+            import shutil
+            shutil.copy(audio_file, args.output)
+            os.remove(audio_file)
+            print(args.output)
+        elif args.no_play:
+            print(audio_file)
+        else:
+            # Play the audio
+            try:
+                play_audio(audio_file, args.player)
+            finally:
+                # Clean up temp file
+                try:
+                    os.remove(audio_file)
+                except:
+                    pass
+
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        sock.close()
+
+
+if __name__ == "__main__":
+    main()
