@@ -19,12 +19,68 @@ import subprocess
 import sys
 import time
 
-DEFAULT_SOCKET_PATH = os.path.join(
-    os.environ.get("XDG_RUNTIME_DIR", "/tmp"),
-    "chatterbox-tts/chatterbox-tts.sock"
-)
+RUNTIME_DIR = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+CPU_SOCKET_PATH = os.path.join(RUNTIME_DIR, "chatterbox-tts/chatterbox-tts.sock")
+CUDA_SOCKET_PATH = os.path.join(RUNTIME_DIR, "chatterbox-tts-cuda/chatterbox-tts.sock")
 CONNECT_TIMEOUT = 30
 READ_TIMEOUT = 120
+
+
+def has_nvidia_gpu() -> bool:
+    """Check if an NVIDIA GPU is available on the system."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True,
+            timeout=10  # Allow time for driver initialization on first call
+        )
+        return result.returncode == 0 and bool(result.stdout.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def get_socket_path(prefer_gpu: bool | None = None) -> str:
+    """
+    Determine which socket to use based on GPU availability.
+
+    Args:
+        prefer_gpu: True to prefer GPU, False to prefer CPU, None for auto-detect
+
+    Returns:
+        Path to the appropriate socket
+    """
+    # Check environment variable override
+    env_socket = os.environ.get("CHATTERBOX_SOCKET")
+    if env_socket:
+        return env_socket
+
+    # Check preference
+    env_prefer = os.environ.get("CHATTERBOX_PREFER_GPU", "").lower()
+    if prefer_gpu is None:
+        if env_prefer in ("1", "true", "yes"):
+            prefer_gpu = True
+        elif env_prefer in ("0", "false", "no"):
+            prefer_gpu = False
+
+    # Auto-detect: try CUDA socket if GPU available, otherwise CPU
+    if prefer_gpu is True:
+        # User wants GPU - try CUDA first, fall back to CPU
+        if os.path.exists(CUDA_SOCKET_PATH):
+            return CUDA_SOCKET_PATH
+        return CPU_SOCKET_PATH
+    elif prefer_gpu is False:
+        # User wants CPU
+        return CPU_SOCKET_PATH
+    else:
+        # Auto-detect: prefer CUDA if GPU available and socket exists
+        if has_nvidia_gpu() and os.path.exists(CUDA_SOCKET_PATH):
+            return CUDA_SOCKET_PATH
+        if os.path.exists(CPU_SOCKET_PATH):
+            return CPU_SOCKET_PATH
+        # Neither exists yet - prefer CUDA if GPU available (socket activation will start it)
+        if has_nvidia_gpu():
+            return CUDA_SOCKET_PATH
+        return CPU_SOCKET_PATH
 
 
 def send_request(sock: socket.socket, request: dict) -> dict:
@@ -108,8 +164,19 @@ def main():
     )
     parser.add_argument(
         "--socket", "-s",
-        default=os.environ.get("CHATTERBOX_SOCKET", DEFAULT_SOCKET_PATH),
-        help=f"Path to daemon Unix socket (default: {DEFAULT_SOCKET_PATH})"
+        default=None,
+        help="Path to daemon Unix socket (default: auto-detect based on GPU)"
+    )
+    parser.add_argument(
+        "--prefer-gpu",
+        action="store_true",
+        default=None,
+        help="Prefer CUDA/GPU backend if available"
+    )
+    parser.add_argument(
+        "--prefer-cpu",
+        action="store_true",
+        help="Prefer CPU backend even if GPU is available"
     )
     parser.add_argument(
         "--text", "-t",
@@ -161,11 +228,25 @@ def main():
 
     args = parser.parse_args()
 
+    # Determine socket path
+    if args.socket:
+        socket_path = args.socket
+    else:
+        # Determine GPU preference
+        if args.prefer_cpu:
+            prefer_gpu = False
+        elif args.prefer_gpu:
+            prefer_gpu = True
+        else:
+            prefer_gpu = None  # Auto-detect
+        socket_path = get_socket_path(prefer_gpu)
+
     try:
-        sock = connect_to_daemon(args.socket)
+        sock = connect_to_daemon(socket_path)
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
-        print("Is the chatterbox-tts-daemon running?", file=sys.stderr)
+        print("Is the chatterbox-tts service running?", file=sys.stderr)
+        print("Try: systemctl --user start chatterbox-tts.socket", file=sys.stderr)
         sys.exit(1)
 
     try:
@@ -228,10 +309,10 @@ def main():
             sys.exit(1)
 
         # Translate container path to host path
-        # Container: /run/chatterbox/file.wav -> Host: $XDG_RUNTIME_DIR/chatterbox-tts/file.wav
-        container_prefix = "/run/chatterbox/"
+        # Container: /app/output/file.wav -> Host: $XDG_RUNTIME_DIR/chatterbox-tts[/-cuda]/file.wav
+        container_prefix = "/app/output/"
         if audio_file.startswith(container_prefix):
-            host_socket_dir = os.path.dirname(args.socket)
+            host_socket_dir = os.path.dirname(socket_path)
             audio_file = os.path.join(host_socket_dir, audio_file[len(container_prefix):])
 
         if args.output:

@@ -41,9 +41,11 @@ install -Dm644 config/chatterbox.conf %{buildroot}%{_sysconfdir}/speech-dispatch
 # Drop-in config for AddModule
 install -Dm644 config/modules.d/chatterbox.conf %{buildroot}%{_sysconfdir}/speech-dispatcher/modules.d/chatterbox.conf
 
-# Quadlet files
-install -Dm644 container/chatterbox-tts.container %{buildroot}%{_datadir}/%{name}/quadlets/chatterbox-tts.container
-install -Dm644 container/chatterbox-tts-cuda.container %{buildroot}%{_datadir}/%{name}/quadlets/chatterbox-tts-cuda.container
+# Quadlet files - install to user quadlets directory
+install -Dm644 container/chatterbox-tts.socket %{buildroot}%{_sysconfdir}/containers/systemd/users/chatterbox-tts.socket
+install -Dm644 container/chatterbox-tts.container %{buildroot}%{_sysconfdir}/containers/systemd/users/chatterbox-tts.container
+install -Dm644 container/chatterbox-tts-cuda.socket %{buildroot}%{_sysconfdir}/containers/systemd/users/chatterbox-tts-cuda.socket
+install -Dm644 container/chatterbox-tts-cuda.container %{buildroot}%{_sysconfdir}/containers/systemd/users/chatterbox-tts-cuda.container
 
 # Note: README.md and LICENSE are handled by %doc and %license macros in %files
 
@@ -63,13 +65,14 @@ killall speech-dispatcher 2>/dev/null || true
 echo ""
 echo "Chatterbox TTS installed successfully!"
 echo ""
-echo "To set up the service, run as your user:"
-echo "  mkdir -p ~/.config/containers/systemd"
-echo "  cp %{_datadir}/%{name}/quadlets/chatterbox-tts.container ~/.config/containers/systemd/"
-echo "  # Or for CUDA: cp %{_datadir}/%{name}/quadlets/chatterbox-tts-cuda.container ~/.config/containers/systemd/chatterbox-tts.container"
+echo "To enable socket activation (recommended), run as your user:"
 echo "  systemctl --user daemon-reload"
-echo "  systemctl --user enable --now chatterbox-tts"
+echo "  systemctl --user enable --now chatterbox-tts.socket"
 echo ""
+echo "For CUDA/GPU support, also enable the CUDA socket:"
+echo "  systemctl --user enable --now chatterbox-tts-cuda.socket"
+echo ""
+echo "The client auto-detects GPU and picks the right backend."
 echo "Then test with: spd-say -o chatterbox 'Hello world'"
 echo ""
 
@@ -83,10 +86,13 @@ killall speech-dispatcher 2>/dev/null || true
 %{_bindir}/chatterbox-tts-client
 %config(noreplace) %{_sysconfdir}/speech-dispatcher/modules/chatterbox.conf
 %config(noreplace) %{_sysconfdir}/speech-dispatcher/modules.d/chatterbox.conf
-%{_datadir}/%{name}/quadlets/chatterbox-tts.container
-%{_datadir}/%{name}/quadlets/chatterbox-tts-cuda.container
-%dir %{_datadir}/%{name}
-%dir %{_datadir}/%{name}/quadlets
+%{_sysconfdir}/containers/systemd/users/chatterbox-tts.socket
+%{_sysconfdir}/containers/systemd/users/chatterbox-tts.container
+%{_sysconfdir}/containers/systemd/users/chatterbox-tts-cuda.socket
+%{_sysconfdir}/containers/systemd/users/chatterbox-tts-cuda.container
+%dir %{_sysconfdir}/containers
+%dir %{_sysconfdir}/containers/systemd
+%dir %{_sysconfdir}/containers/systemd/users
 
 %changelog
 * Tue Dec 31 2024 Robert Sturla <rsturla@redhat.com> - 0.1.0-1
