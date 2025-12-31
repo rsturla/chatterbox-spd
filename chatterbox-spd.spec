@@ -41,11 +41,13 @@ install -Dm644 config/chatterbox.conf %{buildroot}%{_sysconfdir}/speech-dispatch
 # Drop-in config for AddModule
 install -Dm644 config/modules.d/chatterbox.conf %{buildroot}%{_sysconfdir}/speech-dispatcher/modules.d/chatterbox.conf
 
-# Quadlet files - install to user quadlets directory
-install -Dm644 container/chatterbox-tts.socket %{buildroot}%{_sysconfdir}/containers/systemd/users/chatterbox-tts.socket
+# Quadlet container files - install to user quadlets directory
 install -Dm644 container/chatterbox-tts.container %{buildroot}%{_sysconfdir}/containers/systemd/users/chatterbox-tts.container
-install -Dm644 container/chatterbox-tts-cuda.socket %{buildroot}%{_sysconfdir}/containers/systemd/users/chatterbox-tts-cuda.socket
 install -Dm644 container/chatterbox-tts-cuda.container %{buildroot}%{_sysconfdir}/containers/systemd/users/chatterbox-tts-cuda.container
+
+# Systemd socket units - install to user units directory
+install -Dm644 container/chatterbox-tts.socket %{buildroot}%{_prefix}/lib/systemd/user/chatterbox-tts.socket
+install -Dm644 container/chatterbox-tts-cuda.socket %{buildroot}%{_prefix}/lib/systemd/user/chatterbox-tts-cuda.socket
 
 # Note: README.md and LICENSE are handled by %doc and %license macros in %files
 
@@ -86,14 +88,14 @@ killall speech-dispatcher 2>/dev/null || true
 %{_bindir}/chatterbox-tts-client
 %config(noreplace) %{_sysconfdir}/speech-dispatcher/modules/chatterbox.conf
 %config(noreplace) %{_sysconfdir}/speech-dispatcher/modules.d/chatterbox.conf
-%{_sysconfdir}/containers/systemd/users/chatterbox-tts.socket
 %{_sysconfdir}/containers/systemd/users/chatterbox-tts.container
-%{_sysconfdir}/containers/systemd/users/chatterbox-tts-cuda.socket
 %{_sysconfdir}/containers/systemd/users/chatterbox-tts-cuda.container
 %dir %{_sysconfdir}/containers
 %dir %{_sysconfdir}/containers/systemd
 %dir %{_sysconfdir}/containers/systemd/users
+%{_prefix}/lib/systemd/user/chatterbox-tts.socket
+%{_prefix}/lib/systemd/user/chatterbox-tts-cuda.socket
 
 %changelog
-* Tue Dec 31 2024 Robert Sturla <rsturla@redhat.com> - 0.1.0-1
+* Wed Dec 31 2025 Robert Sturla <rsturla@redhat.com> - 0.1.0-1
 - Initial package
