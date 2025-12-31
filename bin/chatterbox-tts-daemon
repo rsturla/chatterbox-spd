@@ -1,0 +1,316 @@
+#!/usr/bin/env python3
+"""
+Chatterbox TTS Daemon for Speech Dispatcher
+
+This daemon loads the Chatterbox TTS model once and listens on a Unix socket
+for synthesis requests. This avoids the overhead of loading the model for
+each utterance.
+
+Models are downloaded automatically on first use from Hugging Face.
+"""
+
+import argparse
+import json
+import os
+import signal
+import socket
+import struct
+import sys
+import tempfile
+import threading
+import time
+
+# Ensure we can find the modules
+try:
+    import torch
+    import torchaudio as ta
+except ImportError:
+    print("Error: PyTorch and torchaudio are required.", file=sys.stderr)
+    print("Install with: pip install torch torchaudio", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    from chatterbox.tts_turbo import ChatterboxTurboTTS
+except ImportError:
+    print("Error: chatterbox-tts is required.", file=sys.stderr)
+    print("Install with: pip install chatterbox-tts", file=sys.stderr)
+    sys.exit(1)
+
+# Configuration
+DEFAULT_SOCKET_PATH = "/tmp/chatterbox-tts.sock"
+DEFAULT_CACHE_DIR = os.path.expanduser("~/.cache/chatterbox-spd")
+MAX_TEXT_LENGTH = 65536
+SOCKET_TIMEOUT = 300  # 5 minutes
+
+
+class ChatterboxDaemon:
+    def __init__(self, socket_path: str, device: str, voice_dir: str | None = None):
+        self.socket_path = socket_path
+        self.device = device
+        self.voice_dir = voice_dir or os.path.join(DEFAULT_CACHE_DIR, "voices")
+        self.model = None
+        self.server_socket = None
+        self.running = False
+        self.lock = threading.Lock()
+
+        # Ensure directories exist
+        os.makedirs(DEFAULT_CACHE_DIR, exist_ok=True)
+        os.makedirs(self.voice_dir, exist_ok=True)
+
+    def load_model(self):
+        """Load the Chatterbox TTS model. Downloads on first use."""
+        print(f"Loading Chatterbox TTS model on device: {self.device}", file=sys.stderr)
+        print("(This may take a while on first run as models are downloaded)", file=sys.stderr)
+
+        start_time = time.time()
+        self.model = ChatterboxTurboTTS.from_pretrained(device=self.device)
+        elapsed = time.time() - start_time
+
+        print(f"Model loaded in {elapsed:.1f}s. Sample rate: {self.model.sr}", file=sys.stderr)
+
+    def synthesize(self, text: str, voice: str | None = None,
+                   exaggeration: float = 0.5, cfg_weight: float = 0.5) -> str:
+        """
+        Synthesize text to speech and return path to WAV file.
+
+        Args:
+            text: Text to synthesize
+            voice: Optional voice name (corresponds to a .wav file in voice_dir)
+            exaggeration: Exaggeration parameter (0.0-1.0)
+            cfg_weight: CFG weight parameter (0.0-1.0)
+
+        Returns:
+            Path to generated WAV file
+        """
+        with self.lock:
+            # Find voice reference file if specified
+            audio_prompt_path = None
+            if voice and voice != "default":
+                voice_path = os.path.join(self.voice_dir, f"{voice}.wav")
+                if os.path.exists(voice_path):
+                    audio_prompt_path = voice_path
+                else:
+                    print(f"Warning: Voice '{voice}' not found at {voice_path}", file=sys.stderr)
+
+            # Generate speech
+            try:
+                if audio_prompt_path:
+                    wav = self.model.generate(
+                        text,
+                        audio_prompt_path=audio_prompt_path,
+                        exaggeration=exaggeration,
+                        cfg_weight=cfg_weight
+                    )
+                else:
+                    wav = self.model.generate(
+                        text,
+                        exaggeration=exaggeration,
+                        cfg_weight=cfg_weight
+                    )
+            except Exception as e:
+                raise RuntimeError(f"Synthesis failed: {e}") from e
+
+            # Save to temporary file in the socket directory (shared with host)
+            socket_dir = os.path.dirname(self.socket_path)
+            fd, output_path = tempfile.mkstemp(suffix=".wav", prefix="chatterbox_", dir=socket_dir)
+            os.close(fd)
+
+            ta.save(output_path, wav, self.model.sr)
+
+            return output_path
+
+    def handle_client(self, client_socket: socket.socket):
+        """Handle a client connection."""
+        try:
+            client_socket.settimeout(SOCKET_TIMEOUT)
+
+            # Read message length (4 bytes, big-endian)
+            length_data = client_socket.recv(4)
+            if len(length_data) < 4:
+                return
+
+            msg_length = struct.unpack(">I", length_data)[0]
+            if msg_length > MAX_TEXT_LENGTH:
+                response = {"error": "Message too long"}
+                self._send_response(client_socket, response)
+                return
+
+            # Read the JSON message
+            data = b""
+            while len(data) < msg_length:
+                chunk = client_socket.recv(min(4096, msg_length - len(data)))
+                if not chunk:
+                    break
+                data += chunk
+
+            if len(data) < msg_length:
+                return
+
+            # Parse request
+            try:
+                request = json.loads(data.decode("utf-8"))
+            except json.JSONDecodeError as e:
+                response = {"error": f"Invalid JSON: {e}"}
+                self._send_response(client_socket, response)
+                return
+
+            # Handle different commands
+            command = request.get("command", "synthesize")
+
+            if command == "synthesize":
+                text = request.get("text", "")
+                if not text:
+                    response = {"error": "No text provided"}
+                else:
+                    try:
+                        output_path = self.synthesize(
+                            text=text,
+                            voice=request.get("voice"),
+                            exaggeration=request.get("exaggeration", 0.5),
+                            cfg_weight=request.get("cfg_weight", 0.5)
+                        )
+                        response = {"status": "ok", "audio_file": output_path, "sample_rate": self.model.sr}
+                    except Exception as e:
+                        response = {"error": str(e)}
+
+            elif command == "ping":
+                response = {"status": "ok", "message": "pong"}
+
+            elif command == "list_voices":
+                voices = ["default"]
+                if os.path.isdir(self.voice_dir):
+                    for f in os.listdir(self.voice_dir):
+                        if f.endswith(".wav"):
+                            voices.append(f[:-4])
+                response = {"status": "ok", "voices": voices}
+
+            elif command == "shutdown":
+                response = {"status": "ok", "message": "shutting down"}
+                self._send_response(client_socket, response)
+                self.running = False
+                return
+
+            else:
+                response = {"error": f"Unknown command: {command}"}
+
+            self._send_response(client_socket, response)
+
+        except TimeoutError:
+            print("Client connection timed out", file=sys.stderr)
+        except Exception as e:
+            print(f"Error handling client: {e}", file=sys.stderr)
+        finally:
+            try:
+                client_socket.close()
+            except OSError:
+                pass
+
+    def _send_response(self, client_socket: socket.socket, response: dict):
+        """Send a JSON response to the client."""
+        data = json.dumps(response).encode("utf-8")
+        length = struct.pack(">I", len(data))
+        client_socket.sendall(length + data)
+
+    def start(self):
+        """Start the daemon."""
+        # Remove existing socket file
+        if os.path.exists(self.socket_path):
+            os.remove(self.socket_path)
+
+        # Load the model
+        self.load_model()
+
+        # Create and bind socket
+        self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.bind(self.socket_path)
+        self.server_socket.listen(5)
+
+        # Make socket accessible
+        os.chmod(self.socket_path, 0o666)
+
+        self.running = True
+        print(f"Chatterbox TTS daemon listening on {self.socket_path}", file=sys.stderr)
+
+        # Handle connections
+        while self.running:
+            try:
+                self.server_socket.settimeout(1.0)
+                try:
+                    client_socket, _ = self.server_socket.accept()
+                    # Handle each client in a separate thread
+                    thread = threading.Thread(target=self.handle_client, args=(client_socket,))
+                    thread.daemon = True
+                    thread.start()
+                except TimeoutError:
+                    continue
+            except Exception as e:
+                if self.running:
+                    print(f"Error accepting connection: {e}", file=sys.stderr)
+
+        self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources."""
+        if self.server_socket:
+            try:
+                self.server_socket.close()
+            except OSError:
+                pass
+
+        if os.path.exists(self.socket_path):
+            try:
+                os.remove(self.socket_path)
+            except OSError:
+                pass
+
+        print("Daemon stopped", file=sys.stderr)
+
+    def stop(self):
+        """Signal the daemon to stop."""
+        self.running = False
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Chatterbox TTS Daemon for Speech Dispatcher"
+    )
+    parser.add_argument(
+        "--socket", "-s",
+        default=DEFAULT_SOCKET_PATH,
+        help=f"Path to Unix socket (default: {DEFAULT_SOCKET_PATH})"
+    )
+    parser.add_argument(
+        "--device", "-d",
+        default="cuda" if torch.cuda.is_available() else "cpu",
+        choices=["cuda", "cpu"],
+        help="Device to run model on (default: cuda if available, else cpu)"
+    )
+    parser.add_argument(
+        "--voice-dir", "-v",
+        default=None,
+        help=f"Directory containing voice reference WAV files (default: {DEFAULT_CACHE_DIR}/voices)"
+    )
+
+    args = parser.parse_args()
+
+    daemon = ChatterboxDaemon(
+        socket_path=args.socket,
+        device=args.device,
+        voice_dir=args.voice_dir
+    )
+
+    # Handle signals
+    def signal_handler(signum, frame):
+        print("\nReceived signal, shutting down...", file=sys.stderr)
+        daemon.stop()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    # Start the daemon
+    daemon.start()
+
+
+if __name__ == "__main__":
+    main()

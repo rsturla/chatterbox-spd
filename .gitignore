@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Container build artifacts
+*.tar
+*.tar.gz
+*.tar.zst
+
+# Logs
+*.log
+
+# Local development
+.env.local
+secrets/
+*.secret
+
+# HuggingFace token (never commit!)
+token
+.huggingface/
+
+# Test outputs
+*.wav
+*.mp3
+test_output/
+
+# RPM build output
+rpmbuild/

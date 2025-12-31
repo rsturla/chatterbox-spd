@@ -1,0 +1,75 @@
+# Chatterbox TTS Quadlet Container Unit (CUDA/GPU)
+#
+# This file defines the Chatterbox TTS container with GPU support.
+# Use this version if you have an NVIDIA GPU.
+#
+# Requirements:
+#   - NVIDIA GPU
+#   - nvidia-container-toolkit installed
+#   - Podman configured for GPU access
+#
+# Installation (user):
+#   mkdir -p ~/.config/containers/systemd
+#   cp chatterbox-tts-cuda.container ~/.config/containers/systemd/chatterbox-tts.container
+#   systemctl --user daemon-reload
+#   systemctl --user start chatterbox-tts
+#
+
+[Unit]
+Description=Chatterbox TTS Daemon for Speech Dispatcher (CUDA)
+After=local-fs.target
+
+[Container]
+# Container image from GitHub Container Registry (CUDA version)
+Image=ghcr.io/rsturla/chatterbox-spd:cuda
+# For local development builds, use:
+# Image=localhost/chatterbox-tts:cuda
+
+# Container name
+ContainerName=chatterbox-tts
+
+# Run parameters for the daemon
+Exec=--socket /run/chatterbox/chatterbox-tts.sock --voice-dir /app/voices --device cuda
+
+# GPU access - pass all NVIDIA devices
+AddDevice=nvidia.com/gpu=all
+
+# Security - required for GPU access
+SecurityLabelDisable=true
+
+# Socket directory - use XDG_RUNTIME_DIR for proper permissions
+# The socket will be at $XDG_RUNTIME_DIR/chatterbox-tts/chatterbox-tts.sock
+Volume=%t/chatterbox-tts:/run/chatterbox:z
+
+# Voice files - for voice cloning
+Volume=%h/.cache/chatterbox-spd/voices:/app/voices:z
+
+# Models are baked into the image - no cache volume needed
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+Environment=NVIDIA_VISIBLE_DEVICES=all
+Environment=NVIDIA_DRIVER_CAPABILITIES=compute,utility
+# Offline mode - models baked into image, dummy token satisfies token=True check
+Environment=HF_HUB_OFFLINE=1
+Environment=HF_TOKEN=offline_mode_dummy_token
+
+# Auto-update policy
+AutoUpdate=registry
+
+# Health check
+HealthCmd=/usr/bin/python3 -c "import socket; s=socket.socket(socket.AF_UNIX); s.connect('/run/chatterbox/chatterbox-tts.sock'); s.close()"
+HealthInterval=30s
+HealthTimeout=10s
+HealthStartPeriod=120s
+HealthRetries=3
+
+[Service]
+# Create socket directory before starting container
+ExecStartPre=/usr/bin/mkdir -p %t/chatterbox-tts
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
