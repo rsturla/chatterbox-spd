@@ -63,7 +63,7 @@ AutoUpdate=registry
 [Service]
 Restart=on-failure
 RestartSec=10
-TimeoutStartSec=300
+TimeoutStartSec=900
 
 [Install]
 # Socket activates this service, not default.target
