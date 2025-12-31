@@ -39,23 +39,32 @@ except ImportError:
 # Configuration
 DEFAULT_SOCKET_PATH = "/tmp/chatterbox-tts.sock"
 DEFAULT_CACHE_DIR = os.path.expanduser("~/.cache/chatterbox-spd")
+DEFAULT_OUTPUT_DIR = "/tmp"  # Directory for audio output files
 MAX_TEXT_LENGTH = 65536
 SOCKET_TIMEOUT = 300  # 5 minutes
+DEFAULT_IDLE_TIMEOUT = 1200  # 20 minutes (0 to disable)
+SD_LISTEN_FDS_START = 3  # First file descriptor for socket activation
 
 
 class ChatterboxDaemon:
-    def __init__(self, socket_path: str, device: str, voice_dir: str | None = None):
+    def __init__(self, socket_path: str, device: str, voice_dir: str | None = None,
+                 output_dir: str | None = None, idle_timeout: int = DEFAULT_IDLE_TIMEOUT):
         self.socket_path = socket_path
         self.device = device
         self.voice_dir = voice_dir or os.path.join(DEFAULT_CACHE_DIR, "voices")
+        self.output_dir = output_dir or DEFAULT_OUTPUT_DIR
+        self.idle_timeout = idle_timeout
         self.model = None
         self.server_socket = None
         self.running = False
+        self.socket_activated = False
+        self.last_activity = time.time()
         self.lock = threading.Lock()
 
         # Ensure directories exist
         os.makedirs(DEFAULT_CACHE_DIR, exist_ok=True)
         os.makedirs(self.voice_dir, exist_ok=True)
+        os.makedirs(self.output_dir, exist_ok=True)
 
     def load_model(self):
         """Load the Chatterbox TTS model. Downloads on first use."""
@@ -110,9 +119,8 @@ class ChatterboxDaemon:
             except Exception as e:
                 raise RuntimeError(f"Synthesis failed: {e}") from e
 
-            # Save to temporary file in the socket directory (shared with host)
-            socket_dir = os.path.dirname(self.socket_path)
-            fd, output_path = tempfile.mkstemp(suffix=".wav", prefix="chatterbox_", dir=socket_dir)
+            # Save to temporary file in the output directory (shared with host)
+            fd, output_path = tempfile.mkstemp(suffix=".wav", prefix="chatterbox_", dir=self.output_dir)
             os.close(fd)
 
             ta.save(output_path, wav, self.model.sr)
@@ -121,6 +129,7 @@ class ChatterboxDaemon:
 
     def handle_client(self, client_socket: socket.socket):
         """Handle a client connection."""
+        self.last_activity = time.time()
         try:
             client_socket.settimeout(SOCKET_TIMEOUT)
 
@@ -213,24 +222,64 @@ class ChatterboxDaemon:
 
     def start(self):
         """Start the daemon."""
-        # Remove existing socket file
-        if os.path.exists(self.socket_path):
-            os.remove(self.socket_path)
-
-        # Load the model
+        # Load the model first (this takes time, do before accepting connections)
         self.load_model()
 
-        # Create and bind socket
-        self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server_socket.bind(self.socket_path)
-        self.server_socket.listen(5)
+        # Check for systemd socket activation
+        # Method 1: Check LISTEN_FDS environment variable (standard systemd way)
+        # Method 2: Check if FD 3 is a valid socket (works with Podman containers)
+        listen_fds = os.environ.get("LISTEN_FDS")
+        listen_pid = os.environ.get("LISTEN_PID")
 
-        # Make socket accessible
-        os.chmod(self.socket_path, 0o666)
+        socket_activated = False
+        if listen_fds and listen_pid == str(os.getpid()):
+            # Standard systemd socket activation
+            num_fds = int(listen_fds)
+            if num_fds >= 1:
+                socket_activated = True
+                print(f"Socket activation detected via LISTEN_FDS={num_fds}", file=sys.stderr)
+        else:
+            # Check if FD 3 is a socket (Podman passes socket but not env vars)
+            try:
+                # Try to get socket options - will fail if not a socket
+                # Dup the FD first since socket.fromfd() creates a new FD internally
+                test_fd = os.dup(SD_LISTEN_FDS_START)
+                test_sock = socket.fromfd(test_fd, socket.AF_UNIX, socket.SOCK_STREAM)
+                try:
+                    test_sock.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE)
+                    socket_activated = True
+                    print("Socket activation detected via FD 3 probe", file=sys.stderr)
+                finally:
+                    test_sock.close()
+            except OSError:
+                pass
+
+        if socket_activated:
+            # Duplicate the FD so Python doesn't close the original, then close the original
+            inherited_fd = os.dup(SD_LISTEN_FDS_START)
+            os.close(SD_LISTEN_FDS_START)
+            self.server_socket = socket.fromfd(inherited_fd, socket.AF_UNIX, socket.SOCK_STREAM)
+            self.socket_activated = True
+            print("Using socket-activated file descriptor", file=sys.stderr)
+        else:
+            # Manual start - create our own socket
+            if os.path.exists(self.socket_path):
+                os.remove(self.socket_path)
+
+            self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server_socket.bind(self.socket_path)
+            self.server_socket.listen(5)
+
+            # Make socket accessible
+            os.chmod(self.socket_path, 0o666)
+            print(f"Chatterbox TTS daemon listening on {self.socket_path}", file=sys.stderr)
 
         self.running = True
-        print(f"Chatterbox TTS daemon listening on {self.socket_path}", file=sys.stderr)
+        self.last_activity = time.time()
+
+        if self.idle_timeout > 0:
+            print(f"Idle timeout: {self.idle_timeout} seconds", file=sys.stderr)
 
         # Handle connections
         while self.running:
@@ -238,11 +287,18 @@ class ChatterboxDaemon:
                 self.server_socket.settimeout(1.0)
                 try:
                     client_socket, _ = self.server_socket.accept()
+                    self.last_activity = time.time()
                     # Handle each client in a separate thread
                     thread = threading.Thread(target=self.handle_client, args=(client_socket,))
                     thread.daemon = True
                     thread.start()
                 except TimeoutError:
+                    # Check idle timeout
+                    if self.idle_timeout > 0:
+                        idle_time = time.time() - self.last_activity
+                        if idle_time >= self.idle_timeout:
+                            print(f"Idle timeout reached ({self.idle_timeout}s), exiting", file=sys.stderr)
+                            break
                     continue
             except Exception as e:
                 if self.running:
@@ -258,7 +314,8 @@ class ChatterboxDaemon:
             except OSError:
                 pass
 
-        if os.path.exists(self.socket_path):
+        # Only remove socket if we created it (not socket-activated)
+        if not self.socket_activated and os.path.exists(self.socket_path):
             try:
                 os.remove(self.socket_path)
             except OSError:
@@ -272,6 +329,10 @@ class ChatterboxDaemon:
 
 
 def main():
+    # Get defaults from environment variables
+    env_idle_timeout = os.environ.get("CHATTERBOX_IDLE_TIMEOUT")
+    default_idle_timeout = int(env_idle_timeout) if env_idle_timeout else DEFAULT_IDLE_TIMEOUT
+
     parser = argparse.ArgumentParser(
         description="Chatterbox TTS Daemon for Speech Dispatcher"
     )
@@ -291,13 +352,28 @@ def main():
         default=None,
         help=f"Directory containing voice reference WAV files (default: {DEFAULT_CACHE_DIR}/voices)"
     )
+    parser.add_argument(
+        "--output-dir", "-o",
+        default=os.environ.get("CHATTERBOX_OUTPUT_DIR", DEFAULT_OUTPUT_DIR),
+        help=f"Directory for audio output files (default: {DEFAULT_OUTPUT_DIR}). "
+             "Can also be set via CHATTERBOX_OUTPUT_DIR environment variable."
+    )
+    parser.add_argument(
+        "--idle-timeout", "-t",
+        type=int,
+        default=default_idle_timeout,
+        help=f"Idle timeout in seconds before daemon exits (0 to disable, default: {default_idle_timeout}). "
+             "Can also be set via CHATTERBOX_IDLE_TIMEOUT environment variable."
+    )
 
     args = parser.parse_args()
 
     daemon = ChatterboxDaemon(
         socket_path=args.socket,
         device=args.device,
-        voice_dir=args.voice_dir
+        voice_dir=args.voice_dir,
+        output_dir=args.output_dir,
+        idle_timeout=args.idle_timeout
     )
 
     # Handle signals

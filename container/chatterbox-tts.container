@@ -1,22 +1,29 @@
-# Chatterbox TTS Quadlet Container Unit
+# Chatterbox TTS Quadlet Container Unit (CPU)
 #
 # This file defines the Chatterbox TTS container for systemd/Podman Quadlet.
+# Uses socket activation - the container starts when a client connects.
+#
+# The client auto-detects GPU and uses the CUDA backend if available.
+# Install both CPU and CUDA versions for automatic fallback.
 #
 # Installation (user):
 #   mkdir -p ~/.config/containers/systemd
+#   cp chatterbox-tts.socket ~/.config/containers/systemd/
 #   cp chatterbox-tts.container ~/.config/containers/systemd/
 #   systemctl --user daemon-reload
-#   systemctl --user start chatterbox-tts
+#   systemctl --user enable --now chatterbox-tts.socket
 #
 # Installation (system):
+#   cp chatterbox-tts.socket /etc/containers/systemd/
 #   cp chatterbox-tts.container /etc/containers/systemd/
 #   systemctl daemon-reload
-#   systemctl start chatterbox-tts
+#   systemctl enable --now chatterbox-tts.socket
 #
 
 [Unit]
 Description=Chatterbox TTS Daemon for Speech Dispatcher
-After=local-fs.target
+Requires=chatterbox-tts.socket
+After=chatterbox-tts.socket
 
 [Container]
 # Container image from GitHub Container Registry
@@ -28,11 +35,14 @@ Image=ghcr.io/rsturla/chatterbox-spd:latest
 ContainerName=chatterbox-tts
 
 # Run parameters for the daemon
-Exec=--socket /run/chatterbox/chatterbox-tts.sock --voice-dir /app/voices
+# Socket is inherited via FD from systemd (socket activation)
+Exec=--voice-dir /app/voices --output-dir /app/output
 
-# Socket directory - use XDG_RUNTIME_DIR for proper permissions
-# The socket will be at $XDG_RUNTIME_DIR/chatterbox-tts/chatterbox-tts.sock
-Volume=%t/chatterbox-tts:/run/chatterbox:z
+# No network needed - uses socket activation
+Network=none
+
+# Audio output directory - shared with host for playback
+Volume=%t/chatterbox-tts:/app/output:z
 
 # Voice files - for voice cloning
 Volume=%h/.cache/chatterbox-spd/voices:/app/voices:z
@@ -44,23 +54,17 @@ Environment=PYTHONUNBUFFERED=1
 # Offline mode - models baked into image, dummy token satisfies token=True check
 Environment=HF_HUB_OFFLINE=1
 Environment=HF_TOKEN=offline_mode_dummy_token
+# Idle timeout in seconds (0 to disable, default: 1200 = 20 minutes)
+Environment=CHATTERBOX_IDLE_TIMEOUT=1200
 
 # Auto-update policy
 AutoUpdate=registry
 
-# Health check
-HealthCmd=/usr/bin/python3 -c "import socket; s=socket.socket(socket.AF_UNIX); s.connect('/run/chatterbox/chatterbox-tts.sock'); s.close()"
-HealthInterval=30s
-HealthTimeout=10s
-HealthStartPeriod=120s
-HealthRetries=3
-
 [Service]
-# Create socket directory before starting container
-ExecStartPre=/usr/bin/mkdir -p %t/chatterbox-tts
 Restart=on-failure
 RestartSec=10
 TimeoutStartSec=300
 
 [Install]
-WantedBy=default.target
+# Socket activates this service, not default.target
+WantedBy=

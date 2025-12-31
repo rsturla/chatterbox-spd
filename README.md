@@ -30,10 +30,13 @@ cd chatterbox-spd
 # Install (pulls container from GHCR)
 ./install.sh --user
 
-# Start the service
-systemctl --user enable --now chatterbox-tts
+# Enable socket activation (container starts on first use)
+systemctl --user enable --now chatterbox-tts.socket
 
-# Test it
+# For GPU support, also enable the CUDA socket
+systemctl --user enable --now chatterbox-tts-cuda.socket
+
+# Test it (client auto-detects GPU and picks the right backend)
 spd-say -o chatterbox "Hello from Chatterbox!"
 ```
 
@@ -145,36 +148,52 @@ podman pull ghcr.io/rsturla/chatterbox-spd:cuda
 
 ## Managing the Service
 
+The service uses socket activation. The container starts automatically when a client connects and exits after 20 minutes of inactivity. The client auto-detects GPU and chooses the appropriate backend.
+
 ```bash
-# Check status
-systemctl --user status chatterbox-tts
+# Check socket status
+systemctl --user status chatterbox-tts.socket       # CPU
+systemctl --user status chatterbox-tts-cuda.socket  # GPU
+
+# Check container status (only running if active)
+systemctl --user status chatterbox-tts       # CPU
+systemctl --user status chatterbox-tts-cuda  # GPU
 
 # View logs
-journalctl --user -u chatterbox-tts -f
+journalctl --user -u chatterbox-tts -f       # CPU
+journalctl --user -u chatterbox-tts-cuda -f  # GPU
 
-# Restart
-systemctl --user restart chatterbox-tts
-
-# Stop
+# Stop the container (socket stays active)
 systemctl --user stop chatterbox-tts
+systemctl --user stop chatterbox-tts-cuda
 
-# Disable
-systemctl --user disable chatterbox-tts
+# Disable socket activation entirely
+systemctl --user disable --now chatterbox-tts.socket
+systemctl --user disable --now chatterbox-tts-cuda.socket
 ```
 
 ## Configuration
 
 ### Environment Variables
 
-The client supports these environment variables:
+**Client** (runs on host):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CHATTERBOX_SOCKET` | `$XDG_RUNTIME_DIR/chatterbox-tts/chatterbox-tts.sock` | Socket path |
+| `CHATTERBOX_SOCKET` | auto-detect | Socket path (overrides auto-detection) |
+| `CHATTERBOX_PREFER_GPU` | auto | Set to `1` to prefer GPU, `0` to prefer CPU |
 | `CHATTERBOX_VOICE` | `default` | Voice name |
 | `CHATTERBOX_EXAGGERATION` | `0.5` | Emotion exaggeration (0.0-1.0) |
 | `CHATTERBOX_CFG_WEIGHT` | `0.5` | CFG weight (0.0-1.0) |
 | `CHATTERBOX_PLAYER` | `auto` | Audio player |
+
+The client auto-detects GPU availability and uses the CUDA backend if an NVIDIA GPU is present and the CUDA socket is enabled. Use `--prefer-cpu` or `--prefer-gpu` flags to override.
+
+**Daemon** (runs in container, set in `.container` file):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CHATTERBOX_IDLE_TIMEOUT` | `1200` | Seconds of inactivity before daemon exits (0 to disable) |
 
 ### Speech Dispatcher Module Config
 
@@ -204,8 +223,10 @@ chatterbox-spd/
 ├── config/
 │   └── chatterbox.conf          # Speech-dispatcher module config
 ├── container/
-│   ├── Containerfile            # Container build file
+│   ├── Containerfile                  # Container build file
+│   ├── chatterbox-tts.socket          # Socket unit (CPU)
 │   ├── chatterbox-tts.container       # Quadlet (CPU)
+│   ├── chatterbox-tts-cuda.socket     # Socket unit (GPU)
 │   └── chatterbox-tts-cuda.container  # Quadlet (GPU)
 ├── install.sh                   # Installation script
 ├── Makefile                     # Development tasks
